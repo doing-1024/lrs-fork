@@ -166,15 +166,30 @@ function App() {
   const [speeches, setSpeeches] = useState([]);
   const [running, setRunning] = useState(false);
   const [winner, setWinner] = useState('');
+  const [autoScroll, setAutoScroll] = useState(true);
   const abortRef = useRef(null);
   const logEndRef = useRef(null);
+  const timelineRef = useRef(null);
 
   const alivePlayers = useMemo(() => players.filter((player) => player.alive), [players]);
   const deadPlayers = useMemo(() => players.filter((player) => !player.alive), [players]);
 
   useEffect(() => {
+    if (autoScroll && logEndRef.current) {
+      logEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [logs, autoScroll]);
+
+  function handleTimelineScroll(e) {
+    const { scrollTop, scrollHeight, clientHeight } = e.target;
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
+    setAutoScroll(isAtBottom);
+  }
+
+  function scrollToBottom() {
+    setAutoScroll(true);
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [logs]);
+  }
 
   function addLog(type, title, content, playerId = null) {
     setLogs((current) => [
@@ -236,21 +251,42 @@ function App() {
 
   function makeSystemPrompt(player, visibleSpeeches = speeches) {
     const aliveList = alivePlayers.map((item) => `玩家${item.id}`).join('、');
+    
     const history = visibleSpeeches.length
-      ? visibleSpeeches.map((item) => `第${item.round}天 玩家${item.playerId}: ${item.content}`).join('\n')
-      : '暂无公开发言。';
+      ? visibleSpeeches.map((item) => {
+          const content = item.content.length > 100 ? item.content.substring(0, 100) + '...' : item.content;
+          return `[第${item.round}天] 玩家${item.playerId}: ${content}`;
+        }).join('\n')
+      : '暂无';
+    
     const wolfMates = players
       .filter((item) => item.alive && item.role === ROLES.WEREWOLF && item.id !== player.id)
       .map((item) => `玩家${item.id}`)
       .join('、') || '无';
+    
+    const deathRecords = players
+      .filter((item) => !item.alive)
+      .map((item) => `玩家${item.id}(${item.role})`)
+      .join('、') || '暂无';
+    
+    const roleDescription = {
+      [ROLES.WEREWOLF]: '狼人：每晚与队友讨论并杀人，白天伪装成好人混淆视听。',
+      [ROLES.SEER]: '预言家：每晚查验一名玩家身份，白天可以公布查验结果带队。',
+      [ROLES.WITCH]: '女巫：拥有解药和毒药，可以救人或毒人。',
+      [ROLES.HUNTER]: '猎人：被放逐时可开枪带走一人。',
+      [ROLES.GUARD]: '守卫：每晚守护一名玩家，不能连续守护同一人。',
+      [ROLES.VILLAGER]: '村民：通过发言和分析找出狼人。',
+      [ROLES.IDIOT]: '白痴：被投死不会死亡，但会暴露身份。',
+    }[player.role] || '';
 
     return [
-      `你正在进行 10 人 AI 狼人杀，你是玩家${player.id}，身份是【${player.role}】。`,
-      '角色配置：3狼人、1预言家、1女巫、1猎人、1守卫、2村民、1白痴。',
-      `存活玩家：${aliveList}`,
-      player.role === ROLES.WEREWOLF ? `你的狼同伴：${wolfMates}` : '',
-      `公开讨论记录：\n${history}`,
-      '保持角色立场。夜晚和投票必须按要求只输出目标数字或指定格式。白天发言用中文，30到70字。',
+      `【游戏身份】你是玩家${player.id}，角色是【${player.role}】。`,
+      `【角色说明】${roleDescription}`,
+      `【存活玩家】${aliveList}`,
+      `【已出局玩家】${deathRecords}`,
+      player.role === ROLES.WEREWOLF ? `【狼同伴】${wolfMates}` : '',
+      `【历史发言】共${visibleSpeeches.length}条发言记录：\n${history || '暂无'}`,
+      '【发言要求】白天发言30-70字，要基于以上所有信息分析局势。夜晚只回复目标数字。投票只回复数字。',
     ].filter(Boolean).join('\n');
   }
 
@@ -487,7 +523,7 @@ function App() {
             <h2>游戏进程</h2>
             <span>{logs.length} 条事件</span>
           </div>
-          <div className="timeline">
+          <div className="timeline" ref={timelineRef} onScroll={handleTimelineScroll}>
             {logs.length === 0 && <div className="empty">点击“开始游戏”后，AI 行动、发言和投票会显示在这里。</div>}
             {logs.map((log) => (
               <article className={`event ${log.type}`} key={log.id}>
@@ -503,6 +539,11 @@ function App() {
             ))}
             <div ref={logEndRef} />
           </div>
+          {!autoScroll && logs.length > 0 && (
+            <button className="scroll-to-bottom" onClick={scrollToBottom}>
+              滚动到底部 ↓
+            </button>
+          )}
         </section>
       </section>
 
