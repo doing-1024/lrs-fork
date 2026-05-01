@@ -212,8 +212,9 @@ function App() {
   }
 
   function fillAllDraftModels() {
-    const firstModel = normalizeModels(settingsDraft.models)[0];
-    setSettingsDraft({ ...settingsDraft, models: Array.from({ length: 10 }, () => firstModel) });
+    const currentModels = Array.isArray(settingsDraft.models) ? settingsDraft.models : [];
+    const firstModel = currentModels[0] || '';
+    setSettingsDraft({ ...settingsDraft, models: Array(10).fill(firstModel) });
   }
 
   function resetGame() {
@@ -526,10 +527,14 @@ function App() {
                 <button type="button" className="ghost compact" onClick={fillAllDraftModels}>用玩家0填充全部</button>
               </div>
               <div className="model-grid">
-                {normalizeModels(settingsDraft.models).map((model, index) => (
+                {(Array.isArray(settingsDraft.models) ? settingsDraft.models : []).concat(Array(10).fill('')).slice(0, 10).map((model, index) => (
                   <label className="model-field" key={index}>
                     <span>玩家 {index}</span>
-                    <input value={model} onChange={(event) => updateDraftModel(index, event.target.value)} placeholder="gpt-4o-mini / deepseek-chat" />
+                    <input value={model || ''} onChange={(event) => {
+                      const newModels = [...(Array.isArray(settingsDraft.models) ? settingsDraft.models : [])];
+                      newModels[index] = event.target.value;
+                      setSettingsDraft({ ...settingsDraft, models: newModels });
+                    }} placeholder="留空保存时自动填充" />
                   </label>
                 ))}
               </div>
