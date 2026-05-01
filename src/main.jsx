@@ -513,8 +513,8 @@ function App() {
               <button type="button" className="ghost" onClick={() => setSettingsOpen(false)}>关闭</button>
             </div>
             <label>
-              <span>Base URL <small style={{ opacity: 0.6, fontWeight: 400 }}>（自动修正）</small></span>
-              <input value={normalizeBaseUrl(settingsDraft.baseUrl)} readOnly placeholder="自动修正为 https://xxx/v1/chat/completions" />
+              <span>Base URL <small style={{ opacity: 0.6, fontWeight: 400 }}>（保存时自动修正）</small></span>
+              <input value={settingsDraft.baseUrl} onChange={(event) => setSettingsDraft({ ...settingsDraft, baseUrl: event.target.value })} placeholder="api.openai.com / https://api.openai.com/v1" />
             </label>
             <label>
               <span>API Key</span>
