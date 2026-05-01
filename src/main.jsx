@@ -33,6 +33,39 @@ const PHASES = {
   OVER: '结束',
 };
 
+const PERSONAS = [
+  {
+    name: '激进型',
+    style: '敢于带节奏，优先给出明确怀疑对象，倾向主动进攻和强势表态。',
+    strategy: '发言要有压迫感，少说模糊话；如果信息不足，也要提出最可疑的目标和理由。',
+  },
+  {
+    name: '保守型',
+    style: '谨慎克制，重视风险控制，避免过早暴露关键身份或轻率站队。',
+    strategy: '发言以观察、留信息、降低误伤为主；投票前优先排除明显好人。',
+  },
+  {
+    name: '理智型',
+    style: '重逻辑和证据，倾向复盘发言、死亡、投票关系，减少情绪判断。',
+    strategy: '每次决策都要基于历史矛盾、票型和夜晚结果，给出简洁推理链。',
+  },
+  {
+    name: '综合型',
+    style: '平衡进攻和防守，会结合局势动态切换策略。',
+    strategy: '优势时推进明确目标，劣势时稳住身份和团队信息。',
+  },
+  {
+    name: '伪装型',
+    style: '擅长包装身份，发言自然，避免显得机械或重复。',
+    strategy: '无论真实身份如何，都要让发言像一个有独立视角的玩家。',
+  },
+  {
+    name: '怀疑型',
+    style: '持续质疑他人发言漏洞，对跳身份、跟票、沉默都较敏感。',
+    strategy: '优先追问矛盾点，保留多名嫌疑人并根据新信息调整排序。',
+  },
+];
+
 const STORAGE_KEY = 'werewolf-ai-web-settings';
 
 const DEFAULT_SETTINGS = {
@@ -59,7 +92,8 @@ function shuffle(items) {
 
 function createPlayers() {
   const roles = shuffle(ROLE_POOL);
-  return roles.map((role, id) => ({ id, role, alive: true }));
+  const personas = shuffle(PERSONAS);
+  return roles.map((role, id) => ({ id, role, alive: true, persona: personas[id % personas.length] }));
 }
 
 function extractTarget(text, alivePlayers, fallback = -1) {
@@ -249,26 +283,24 @@ function App() {
     setRunning(false);
   }
 
-  function makeSystemPrompt(player, visibleSpeeches = speeches) {
-    const aliveList = alivePlayers.map((item) => `玩家${item.id}`).join('、');
-    
-    const history = visibleSpeeches.length
-      ? visibleSpeeches.map((item) => {
-          const content = item.content.length > 100 ? item.content.substring(0, 100) + '...' : item.content;
-          return `[第${item.round}天] 玩家${item.playerId}: ${content}`;
-        }).join('\n')
-      : '暂无';
-    
-    const wolfMates = players
-      .filter((item) => item.alive && item.role === ROLES.WEREWOLF && item.id !== player.id)
-      .map((item) => `玩家${item.id}`)
-      .join('、') || '无';
-    
-    const deathRecords = players
+  function makeSystemPrompt(player, currentPlayers, visibleMemory = []) {
+    const aliveList = currentPlayers.filter((item) => item.alive).map((item) => `玩家${item.id}`).join('、');
+    const deathRecords = currentPlayers
       .filter((item) => !item.alive)
       .map((item) => `玩家${item.id}(${item.role})`)
       .join('、') || '暂无';
-    
+    const history = visibleMemory.length
+      ? visibleMemory.map((item) => {
+          const content = String(item.content || '');
+          const shortContent = content.length > 160 ? content.substring(0, 160) + '...' : content;
+          return `[第${item.round}轮][${item.type}] ${shortContent}`;
+        }).join('\n')
+      : '暂无';
+    const wolfMates = currentPlayers
+      .filter((item) => item.alive && item.role === ROLES.WEREWOLF && item.id !== player.id)
+      .map((item) => `玩家${item.id}`)
+      .join('、') || '无';
+
     const roleDescription = {
       [ROLES.WEREWOLF]: '狼人：每晚与队友讨论并杀人，白天伪装成好人混淆视听。',
       [ROLES.SEER]: '预言家：每晚查验一名玩家身份，白天可以公布查验结果带队。',
@@ -281,20 +313,22 @@ function App() {
 
     return [
       `【游戏身份】你是玩家${player.id}，角色是【${player.role}】。`,
+      `【人格设定】${player.persona.name}。${player.persona.style} ${player.persona.strategy}`,
       `【角色说明】${roleDescription}`,
       `【存活玩家】${aliveList}`,
       `【已出局玩家】${deathRecords}`,
       player.role === ROLES.WEREWOLF ? `【狼同伴】${wolfMates}` : '',
-      `【历史发言】共${visibleSpeeches.length}条发言记录：\n${history || '暂无'}`,
-      '【发言要求】白天发言30-70字，要基于以上所有信息分析局势。夜晚只回复目标数字。投票只回复数字。',
+      `【完整公开记忆】共${visibleMemory.length}条：\n${history || '暂无'}`,
+      '【推理要求】必须把本轮信息和历史记忆连起来分析，不要像第一轮一样重置。优先关注：谁推动了错误票、谁跟票、谁在死人身份暴露后收益最大、谁发言前后矛盾。',
+      '【输出要求】白天发言30-70字，体现你的人格；夜晚只回复目标数字或指定格式；投票只回复数字。',
     ].filter(Boolean).join('\n');
   }
 
-  async function requestPlayer(activeSettings, player, userPrompt, fallback, visibleSpeeches = speeches) {
+  async function requestPlayer(activeSettings, currentPlayers, player, userPrompt, fallback, visibleMemory = speeches) {
     const model = activeSettings.models[player.id] || activeSettings.models[0];
     addLog('thinking', `玩家${player.id} 思考中`, `${userPrompt}\n模型：${model}`, player.id);
     try {
-      const answer = await askAi(activeSettings, model, makeSystemPrompt(player, visibleSpeeches), userPrompt, abortRef.current.signal);
+      const answer = await askAi(activeSettings, model, makeSystemPrompt(player, currentPlayers, visibleMemory), userPrompt, abortRef.current.signal);
       addLog('speech', `玩家${player.id} · ${player.role} · ${model}`, answer || fallback, player.id);
       return answer || fallback;
     } catch (error) {
@@ -354,14 +388,14 @@ function App() {
       if (wolfActor) {
         const candidates = localAlive.filter((player) => player.role !== ROLES.WEREWOLF);
         const fallback = candidates[0]?.id ?? localAlive[0]?.id ?? -1;
-        const answer = await requestPlayer(latestSettings, wolfActor, `今晚选择击杀目标。只回复一个玩家数字，可选：${localAlive.map((item) => item.id).join(', ')}`, String(fallback), localSpeeches);
+        const answer = await requestPlayer(latestSettings, localPlayers, wolfActor, `今晚选择击杀目标。只回复一个玩家数字，可选：${localAlive.map((item) => item.id).join(', ')}`, String(fallback), localSpeeches);
         wolfTarget = extractTarget(answer, localAlive, fallback);
       }
 
       const seer = localAlive.find((player) => player.role === ROLES.SEER);
       if (seer) {
         const fallback = localAlive.find((player) => player.id !== seer.id)?.id ?? -1;
-        const answer = await requestPlayer(latestSettings, seer, `今晚选择查验目标。只回复一个玩家数字，可选：${localAlive.map((item) => item.id).join(', ')}`, String(fallback), localSpeeches);
+        const answer = await requestPlayer(latestSettings, localPlayers, seer, `今晚选择查验目标。只回复一个玩家数字，可选：${localAlive.map((item) => item.id).join(', ')}`, String(fallback), localSpeeches);
         const target = extractTarget(answer, localAlive, fallback);
         const checked = localPlayers.find((player) => player.id === target);
         if (checked) addLog('system', '预言家查验', `玩家${target} 的身份是 ${checked.role}。`, seer.id);
@@ -371,7 +405,7 @@ function App() {
       let guardTarget = -1;
       if (guard) {
         const fallback = guard.id;
-        const answer = await requestPlayer(latestSettings, guard, `今晚选择守护目标。只回复一个玩家数字，可选：${localAlive.map((item) => item.id).join(', ')}`, String(fallback), localSpeeches);
+        const answer = await requestPlayer(latestSettings, localPlayers, guard, `今晚选择守护目标。只回复一个玩家数字，可选：${localAlive.map((item) => item.id).join(', ')}`, String(fallback), localSpeeches);
         guardTarget = extractTarget(answer, localAlive, fallback);
       }
 
@@ -382,6 +416,7 @@ function App() {
         const fallback = 'pass';
         const answer = await requestPlayer(
           latestSettings,
+          localPlayers,
           witch,
           `狼人今晚攻击玩家${wolfTarget}。你可以回复 "save ${wolfTarget}" 救人，回复 "poison X" 毒杀一名存活玩家，或回复 "pass"。`,
           fallback,
@@ -399,9 +434,15 @@ function App() {
       if (nightDeaths.length) {
         eliminate(nightDeaths);
         localPlayers = localPlayers.map((player) => nightDeaths.includes(player.id) ? { ...player, alive: false } : player);
-        addLog('death', '夜晚结算', `玩家 ${[...new Set(nightDeaths)].join('、')} 死亡。`);
+        const nightDeathContent = `第${currentRound}夜：玩家 ${[...new Set(nightDeaths)].join('、')} 死亡。`;
+        addLog('death', '夜晚结算', nightDeathContent);
+        localSpeeches = [...localSpeeches, { round: currentRound, type: '夜晚结算', content: nightDeathContent }];
+        setSpeeches(localSpeeches);
       } else {
-        addLog('safe', '夜晚结算', '今晚是平安夜，无人死亡。');
+        const safeContent = `第${currentRound}夜：平安夜，无人死亡。`;
+        addLog('safe', '夜晚结算', safeContent);
+        localSpeeches = [...localSpeeches, { round: currentRound, type: '夜晚结算', content: safeContent }];
+        setSpeeches(localSpeeches);
       }
 
       let result = checkWinner(localPlayers);
@@ -417,8 +458,8 @@ function App() {
       addLog('day', `第 ${currentRound} 天`, '所有存活玩家依次发言。');
       const dayAlive = localPlayers.filter((player) => player.alive);
       for (const player of dayAlive) {
-        const answer = await requestPlayer(latestSettings, player, `现在是第${currentRound}天白天讨论。请基于局势发言，中文30到70字。`, '我先观察大家发言，重点看投票和夜晚死亡信息。', localSpeeches);
-        const record = { round: currentRound, playerId: player.id, content: answer };
+        const answer = await requestPlayer(latestSettings, localPlayers, player, `现在是第${currentRound}天白天讨论。请基于局势发言，中文30到70字。`, '我先观察大家发言，重点看投票和夜晚死亡信息。', localSpeeches);
+        const record = { round: currentRound, type: '白天发言', playerId: player.id, content: `玩家${player.id}: ${answer}` };
         localSpeeches = [...localSpeeches, record];
         setSpeeches(localSpeeches);
       }
@@ -429,17 +470,26 @@ function App() {
       for (const player of dayAlive) {
         const candidates = dayAlive.filter((item) => item.id !== player.id);
         const fallback = candidates[0]?.id ?? -1;
-        const answer = await requestPlayer(latestSettings, player, `请投票放逐一名存活玩家，只回复数字，弃权回复 -1。可选：${dayAlive.map((item) => item.id).join(', ')}`, String(fallback), localSpeeches);
+        const answer = await requestPlayer(latestSettings, localPlayers, player, `请投票放逐一名存活玩家，只回复数字，弃权回复 -1。可选：${dayAlive.map((item) => item.id).join(', ')}`, String(fallback), localSpeeches);
         votes[player.id] = extractTarget(answer, dayAlive, -1);
       }
       const votedOut = countVotes(votes);
-      addLog('vote', '投票结果', Object.entries(votes).map(([voter, target]) => `玩家${voter}->${target}`).join('，'));
+      const voteContent = Object.entries(votes).map(([voter, target]) => `玩家${voter}->${target}`).join('，');
+      addLog('vote', '投票结果', voteContent);
+      localSpeeches = [...localSpeeches, { round: currentRound, type: '投票结果', content: voteContent }];
+      setSpeeches(localSpeeches);
       if (votedOut >= 0) {
         eliminate([votedOut]);
         localPlayers = localPlayers.map((player) => player.id === votedOut ? { ...player, alive: false } : player);
-        addLog('death', '放逐结算', `玩家${votedOut} 被放逐，身份是 ${localPlayers.find((player) => player.id === votedOut)?.role}。`);
+        const exileContent = `玩家${votedOut} 被放逐，身份是 ${localPlayers.find((player) => player.id === votedOut)?.role}。`;
+        addLog('death', '放逐结算', exileContent);
+        localSpeeches = [...localSpeeches, { round: currentRound, type: '放逐结算', content: exileContent }];
+        setSpeeches(localSpeeches);
       } else {
-        addLog('safe', '放逐结算', '平票或弃权，本轮无人被放逐。');
+        const noExileContent = '平票或弃权，本轮无人被放逐。';
+        addLog('safe', '放逐结算', noExileContent);
+        localSpeeches = [...localSpeeches, { round: currentRound, type: '放逐结算', content: noExileContent }];
+        setSpeeches(localSpeeches);
       }
 
       result = checkWinner(localPlayers);
@@ -510,7 +560,7 @@ function App() {
                 <span className="avatar">{player.id}</span>
                 <div>
                   <strong>玩家 {player.id}</strong>
-                  <small>{player.role} · {player.alive ? '存活' : '出局'}</small>
+                  <small>{player.role} · {player.persona.name} · {player.alive ? '存活' : '出局'}</small>
                   <small className="model-name">{settings.models[player.id] || settings.models[0]}</small>
                 </div>
               </div>
